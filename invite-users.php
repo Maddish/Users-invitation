@@ -78,34 +78,45 @@ add_action( 'init', 'secure_invite_check_table' );
 }
 
 function user_invite_email_exists( $email ) {
+	$email=sanitize_email( $email );
+	$existing_user=false;
+	$already_registered=sprintf(_("The email %s has already a registered user"),$email);
 	global $wpdb;
 	//$wpdb->show_errors = true;
+	//check if the user is already registred
 	if( function_exists('email_exists') ) {
 		$existing_user = email_exists( $email );
+		$existing_message=$already_registered;
 	} else {
 		$sql = $wpdb->prepare( "select user_email from " . $wpdb->users . " where user_email = %s;", $email );
 		$saved_email = $wpdb->get_var( $sql );
 		if ( $saved_email ==$email ) {
 			$existing_user = true;
-			$existing_message="This user is already registered";
+			$existing_message=$already_registered;
 		} else {
 			$existing_user = false;
+			$existing_message="";
 		}
 	}
+	//If not registered, also check if the usar has already been invited
+	if (!$existing_user){
+		$sql2 = $wpdb->prepare( "select count(invited_email) from " . $wpdb->prefix . "usersinvitations where invited_email = %s;", $email );
+		$found_emails = $wpdb->get_var( $sql2 );
 
-	$sql2 = $wpdb->prepare( "select count(invited_email) from " . $wpdb->prefix . "usersinvitations where invited_email = %s;", $email );
-	$found_emails = $wpdb->get_var( $sql2 );
-
-	$already_invited = false;
-	if ( $found_emails > 0 ) {
-		$already_invited = true;
-		$existing_message="This user has  already been invited, or is already a registered user";
+		$already_invited = false;
+		if ( $found_emails > 0 ) {
+			$existing_user= true;
+			$existing_message= sprintf(_("User %s has already been invited"),$email);
+		}
 	}
+	/*
 	if ( $existing_user || $already_invited ) {
 		return true;
 		return $existing_message;
 	}
-	return false;
+	*/
+	return array('user_exists' => $existing_user, 'message' => $existing_message);
+	//return false;
 }
 
 function user_invite_send($name)
@@ -115,11 +126,11 @@ function user_invite_send($name)
 	if (is_admin())
 	{
 		// check this email address isn't already registered
-		 if( !user_invite_email_exists($name ) ){
+		$check_user_exist=user_invite_email_exists($name );
+		 if( !$check_user_exist ){
 			$usernickname = $current_user->display_name;
-			$to = sanitize_text_field($name);
+			$to = $pname = sanitize_email($name);
 			$from = $current_user->display_name . ' <' . $current_user->user_email . '>';
-			$pname =  sanitize_text_field($name);
 			$site_name = stripslashes( get_site_option('blogname') );
 			//if ( $site_name == "" ){ $site_name = stripslashes( get_option( 'blogname' ) ); }
 			
@@ -130,7 +141,7 @@ function user_invite_send($name)
 		(%d, %s, now());", $current_user->ID, $to);
 									$wpdb->print_error();
 			$query = $wpdb->query($sql);
-			$query_error = mysql_error();
+			$query_error = mysqli_error();
 			// if the invitation could be saved
 			if ($query)
 			{
@@ -140,23 +151,27 @@ function user_invite_send($name)
 			$mail_message=  isset($mail_options['m_body'] )? $mail_options['m_body'] : 'Hi there ';
 			$mail_message= preg_replace("/\r\n|\r|\n/",'<br/>',$mail_message);
 				$headers = 'From: ' . $from.  "\r\n";
-					$headers  .='Reply-To: ' . $from.  "\r\n";
+				$headers  .='Reply-To: ' . $from.  "\r\n";
 				$headers .= "MIME-Version: 1.0\r\n";
 				$headers .= "Content-Type: text/html; charset=UTF-8\r\n";
 				$message = '<html><body>';
 				$message .=str_replace("%user_email%", $to, $mail_message);
 				$message .= '</body></html>';
 
-				wp_mail($to, $subject, $message, $headers);
-
-				return true;
+				$sent_email = wp_mail($to, $subject, $message, $headers);
+				if ($sent_email) {
+					return true;
+				} else {
+					echo 'The user ' .$name . ' has been correctly addeed but the email cannot be sent;';
+				}
 			} else {
 				$headers = 'From: '. $from . "\r\n" . 
 							'Reply-To: ' . $from;
 				wp_mail(stripslashes( get_site_option("admin_email") ), "Secure invite failure for ".$from, "A user just tried to invite someone to join ".$site_name.". The following SQL query could not be completed:\n\n".$sql."\n\nThe error reported was:\n\n".$query_error."\n\nThis is an automatic email sent by the Secure Invites plugin.", $headers);
 			}
 		} else {
-		echo 'The email ' .$name . ' has been already invited;';
+			echo $check_user_exist['message'];	
+		//echo 'The email ' .$name . ' has been already invited;';
 		
 		}
 	}
@@ -338,7 +353,7 @@ class Invited_Users_List_Table extends WP_List_Table {
 
  function delete_invitation() {
 	global $wpdb;
-	$sql = $wpdb->prepare( "delete from ". database_invite_prefix(). "usersinvitations where id = %s;", $_POST['id'] );
+	$sql = $wpdb->prepare( "delete from ". database_invite_prefix(). "usersinvitations where id = %s;", intval($_POST['id']) );
  }
 /*function get_bulk_actions() {
   $actions = array(
@@ -357,15 +372,14 @@ class Invited_Users_List_Table extends WP_List_Table {
 	global $wpdb;
 	$customquery="";
 	$columns  = $this->get_columns();
-	$delete_true = !empty($_GET["action"]) ? mysql_real_escape_string($_GET["action"]) : '';
-		if ($delete_true=='delete'){
-			$delete_us_id= !empty($_GET["id"]) ? mysql_real_escape_string($_GET["id"]) : '';
-			if(!empty($delete_us_id)){
-
-				$query_del = "DELETE FROM " . $wpdb->prefix . "usersinvitations where id = " . $delete_us_id . " limit 1";
-				$wpdb->query($query_del);
-			}
+	$delete_true = !empty($_GET["action"]) ? sanitize_key($_GET["action"]) : '';
+	if ($delete_true=='delete'){
+		$delete_us_id= !empty($_GET["id"]) ? intval($_GET["id"]) : '';
+		if(!empty($delete_us_id)){
+			$query_del = "DELETE FROM " . $wpdb->prefix . "usersinvitations where id = " . $delete_us_id . " limit 1";
+			$wpdb->query($query_del);
 		}
+	}
 	$hidden   = array();
 	$sortable = $this->get_sortable_columns();
 	$this->_column_headers = array( $columns, $hidden, $sortable );
@@ -373,44 +387,43 @@ class Invited_Users_List_Table extends WP_List_Table {
 
 	$per_page = 10;
 	$user = get_current_user_id();
-$screen = get_current_screen();
-$option = $screen->get_option('per_page', 'option');
+	$screen = get_current_screen();
+	$option = $screen->get_option('per_page', 'option');
+	 
+	$per_page = get_user_meta($user, $option, true);
  
-$per_page = get_user_meta($user, $option, true);
+	if ( empty ( $per_page) || $per_page < 1 ) {
  
-if ( empty ( $per_page) || $per_page < 1 ) {
+	    $per_page = $screen->get_option( 'per_page', 'default' );
  
-    $per_page = $screen->get_option( 'per_page', 'default' );
- 
-}
+	}
 	$current_page = $this->get_pagenum();
 	$example_data = $this->get_sql_results($customquery="");
 	empty($example_data) AND $example_data = array();
 	$total_items = count( $example_data );
 
-		//Which page is this?
-		$paged = !empty($_GET["paged"]) ? mysql_real_escape_string($_GET["paged"]) : '';
-		//Page Number
-		if(empty($paged) || !is_numeric($paged) || $paged<=0 ){ $paged=1; }
-		//How many pages do we have in total?
-		$totalpages = ceil($total_items/$per_page);
-		//adjust the query to take pagination into account
-		if(!empty($paged) && !empty($per_page)){
-			$offset=($paged-1)*$per_page;
-			$customquery=' LIMIT '.(int)$offset.','.(int)$per_page;
-		}
+	//Which page is this?
+	$paged = !empty($_GET["paged"]) ? intval($_GET["paged"]) : '';
+	//Page Number
+	if(empty($paged) || !is_numeric($paged) || $paged<=0 ){ $paged=1; }
+	//How many pages do we have in total?
+	$totalpages = ceil($total_items/$per_page);
+	//adjust the query to take pagination into account
+	if(!empty($paged) && !empty($per_page)){
+		$offset=($paged-1)*$per_page;
+		$customquery=' LIMIT '.(int)$offset.','.(int)$per_page;
+	}
 
-	// only ncessary because we have sample data
-	//$this->found_data = array_slice( $this->example_data,( ( $current_page-1 )* $per_page ), $per_page );
 
 	$this->set_pagination_args( array(
-	'total_items' => $total_items,                  //WE have to calculate the total number of items
-	'per_page'    => $per_page                     //WE have to determine how many items to show on a page
+		'total_items' => $total_items,                  //WE have to calculate the total number of items
+		'per_page'    => $per_page                     //WE have to determine how many items to show on a page
 	) );
 	// $this->items = $this->found_data;
 
 	$this->items =  $this->get_sql_results($customquery);
  }
+
  private function get_sql_results($customquery){
 
 	$orderby = ( ! empty( $_GET['orderby'] ) ) ? $_GET['orderby'] : 'invited_email';
@@ -429,8 +442,8 @@ if ( empty ( $per_page) || $per_page < 1 ) {
 		FROM $table		
 	";
 	 if( isset($_GET['s']) ){
-	 $search=trim($_GET['s']);
-	 $querystr.=" WHERE $table.invited_email  LIKE  '%$search%'";
+		 $search=trim($_GET['s']);
+		 $querystr.=" WHERE $table.invited_email  LIKE  '%$search%'";
 	 }
 	$querystr.=" ORDER BY $orderby $order";
 	if($customquery)$querystr.=$customquery;
@@ -466,11 +479,8 @@ add_action( 'admin_menu', 'my_add_menu_items' );
 add_filter('set-screen-option', 'users_lkists_set_option', 10, 3);
  
 function users_lkists_set_option($status, $option, $value) {
- 
-    if ( 'users_per_page' == $option ) return $value;
- 
-    return $status;
- 
+	if ( 'users_per_page' == $option ) return $value;
+	return $status;
 }
 
 
