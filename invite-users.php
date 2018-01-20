@@ -80,13 +80,22 @@ add_action( 'init', 'secure_invite_check_table' );
 function user_invite_email_exists( $email ) {
 	$email=sanitize_email( $email );
 	$existing_user=false;
-	$already_registered=sprintf(_("The email %s has already a registered user"),$email);
+	$already_registered=sprintf(_("The email %s is already used by a registered user"),$email);
 	global $wpdb;
 	//$wpdb->show_errors = true;
 	//check if the user is already registred
 	if( function_exists('email_exists') ) {
-		$existing_user = email_exists( $email );
-		$existing_message=$already_registered;
+		$exists_user = email_exists( $email );
+		if ( $exists_user ) {
+                        $existing_user = true;
+                        $existing_message=$already_registered;
+
+		} else {
+                        $existing_user = false;
+                        $existing_message="";
+		}	
+		//$existing_message=$already_registered;
+
 	} else {
 		$sql = $wpdb->prepare( "select user_email from " . $wpdb->users . " where user_email = %s;", $email );
 		$saved_email = $wpdb->get_var( $sql );
@@ -98,15 +107,15 @@ function user_invite_email_exists( $email ) {
 			$existing_message="";
 		}
 	}
+	$wpdb->flush();	
 	//If not registered, also check if the usar has already been invited
 	if (!$existing_user){
-		$sql2 = $wpdb->prepare( "select count(invited_email) from " . $wpdb->prefix . "usersinvitations where invited_email = %s;", $email );
-		$found_emails = $wpdb->get_var( $sql2 );
-
-		$already_invited = false;
-		if ( $found_emails > 0 ) {
+		$sql2 = $wpdb->prepare( "SELECT id FROM " . $wpdb->prefix . "usersinvitations WHERE invited_email = %s;", $email );
+		$found_emails = $wpdb->get_results( $sql2 );
+//		$already_invited = false;
+		if ( count($found_emails) > 0 ) {
 			$existing_user= true;
-			$existing_message= sprintf(_("User %s has already been invited"),$email);
+			$existing_message= sprintf(_("User %s has already been invited. Please, remove it from the list of invited users, if you wish to send an invitation again"),$email);
 		}
 	}
 	/*
@@ -127,7 +136,7 @@ function user_invite_send($name)
 	{
 		// check this email address isn't already registered
 		$check_user_exist=user_invite_email_exists($name );
-		 if( !$check_user_exist ){
+		 if( !$check_user_exist['user_exists'] ){
 			$usernickname = $current_user->display_name;
 			$to = $pname = sanitize_email($name);
 			$from = $current_user->display_name . ' <' . $current_user->user_email . '>';
@@ -139,9 +148,8 @@ function user_invite_send($name)
 		(user_id, invited_email, datestamp)
 		values
 		(%d, %s, now());", $current_user->ID, $to);
-									$wpdb->print_error();
+			$wpdb->print_error();
 			$query = $wpdb->query($sql);
-			$query_error = mysqli_error();
 			// if the invitation could be saved
 			if ($query)
 			{
@@ -150,19 +158,20 @@ function user_invite_send($name)
 			$subject=  isset( $mail_options['title'] ) ? $mail_options['title'] : 'Invitation';
 			$mail_message=  isset($mail_options['m_body'] )? $mail_options['m_body'] : 'Hi there ';
 			$mail_message= preg_replace("/\r\n|\r|\n/",'<br/>',$mail_message);
-				$headers = 'From: ' . $from.  "\r\n";
-				$headers  .='Reply-To: ' . $from.  "\r\n";
-				$headers .= "MIME-Version: 1.0\r\n";
-				$headers .= "Content-Type: text/html; charset=UTF-8\r\n";
-				$message = '<html><body>';
-				$message .=str_replace("%user_email%", $to, $mail_message);
-				$message .= '</body></html>';
+			$headers = 'From: ' . $from.  "\r\n";
+			$headers  .='Reply-To: ' . $from.  "\r\n";
+			$headers .= "MIME-Version: 1.0\r\n";
+			$headers .= "Content-Type: text/html; charset=UTF-8\r\n";
+			$message = '<html><body>';
+			$message .=str_replace("%user_email%", $to, $mail_message);
+			$message .= '</body></html>';
 
-				$sent_email = wp_mail($to, $subject, $message, $headers);
-				if ($sent_email) {
-					return true;
-				} else {
-					echo 'The user ' .$name . ' has been correctly addeed but the email cannot be sent;';
+			$sent_email = wp_mail($to, $subject, $message, $headers);
+			if ($sent_email) {
+			//	return true;
+				printf(_("Invitation successfully sent to %s"),$name);
+			} else {
+				printf(_('The user %s has been correctly addeed to the list of invited users, but the email could not be sent. If you are using an SMTP extension, please check that the sender email credentials are correct'),$name);
 				}
 			} else {
 				$headers = 'From: '. $from . "\r\n" . 
