@@ -3,7 +3,7 @@
 Plugin Name: Invite users
 Plugin URI: http://inauditas.com
 Description: Limit wordpress registration to invited users. You can blk invite invite them. Users must use the same email account where they received the invitation
-Version: The Plugin's Version Number, e.g.: 1.0
+Version: 1.1
 Author: Maddish
 Author URI: http://inauditas.com
 License:  GPL2
